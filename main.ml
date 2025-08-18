@@ -1,3 +1,4 @@
+type direction = Vertical | Horizontal;;
 
 type var_type = int * int
 
@@ -11,6 +12,9 @@ type formula =
     | Imply of formula * formula
 ;;
 
+exception FormulaNotSATable
+
+(* Une simplification simple *)
 let rec simpl = function
   | And(Bot, _) | And(_, Bot) -> (Bot, true)
   | Or(Top, _) | Or(_, Top) -> (Top, true)
@@ -38,12 +42,14 @@ let rec simpl = function
   | f -> (f, false)
 ;;
 
+(* Simplification complète *)
 let simplify f =
   let s = ref (simpl f) in
   while snd !s do s := simpl (fst !s) done;
   fst !s
 ;;
 
+(* Substitution *)
 let rec subst f x g = match f with
   | v when v = x -> g
   | Not(f0) -> Not(subst f0 x g)
@@ -53,57 +59,24 @@ let rec subst f x g = match f with
   | _ -> f
 ;;
 
-
-(* Affichage simple d'une formule pour debug *)
-let rec string_of_formula ?(indent=0) f =
-  let pad = String.make indent ' ' in
-  match f with
-  | Var (i, j) -> pad ^ Printf.sprintf "V(%d,%d)" i j
-  | Top -> pad ^ "T"
-  | Bot -> pad ^ "F"
-  | Not f -> pad ^ "¬" ^ string_of_formula f
-  | And (a, b) ->
-      pad ^ "(AND\n"
-      ^ string_of_formula ~indent:(indent+2) a ^ "\n"
-      ^ string_of_formula ~indent:(indent+2) b ^ "\n"
-      ^ pad ^ ")"
-  | Or (a, b) ->
-      pad ^ "(OR\n"
-      ^ string_of_formula ~indent:(indent+2) a ^ "\n"
-      ^ string_of_formula ~indent:(indent+2) b ^ "\n"
-      ^ pad ^ ")"
-  | Imply (a, b) ->
-      pad ^ "(IMPLY\n"
-      ^ string_of_formula ~indent:(indent+2) a ^ "\n"
-      ^ string_of_formula ~indent:(indent+2) b ^ "\n"
-      ^ pad ^ ")"
-;;
-
-let print_formulas l =
-  List.iter (fun f -> print_endline (string_of_formula f)) l
-;;
-
-
-exception FormulaNotSATable
-
-
-let rec quine f0 sigma vars =
+(* Algorithme de backtracking très simple pour trouver une valuation *)
+let rec found_valuation f0 sigma vars =
   let (f, _) = simpl f0 in
 
   if f = Top then true else (
   if f = Bot then false else (
 
-  if vars = [] then quine f sigma vars else (
+  if vars = [] then found_valuation f sigma vars else (
   let x::v = vars in
 
   let f1 = subst f x Top in
-  if quine f1 sigma v
+  if found_valuation f1 sigma v
   then (
     Hashtbl.add sigma x 1;
     true
   ) else (
     let f2 = subst f x Bot in
-    if quine f2 sigma v then (
+    if found_valuation f2 sigma v then (
       Hashtbl.add sigma x 0;
       true
     )
@@ -111,9 +84,7 @@ let rec quine f0 sigma vars =
   ))))
 ;;
 
-
-type direction = Vertical | Horizontal;;
-
+(* Permet de créer toutes les combinaisons de 0 et de 1 suivant les contraintes du nonogramme pour une ligne *)
 let combinations n blocks index d =
   let rec aux k blocks acc =
     match blocks with
@@ -161,8 +132,6 @@ let combinations n blocks index d =
   aux 0 blocks Top
 ;;
 
-
-
 (* Lit un fichier et le convertit en une formule *)
 let file_to_formula file_path =
   let file = open_in file_path in
@@ -180,7 +149,6 @@ let file_to_formula file_path =
   let rec read_l f =
     try
       if !i = n+m then raise End_of_file;
-      Printf.printf "Reading line %d\n%!" (!i+1);
       let line = input_line file in
       let line_f =
         if !i < n
@@ -192,23 +160,29 @@ let file_to_formula file_path =
     with End_of_file -> f
   in
   let f = read_l Top in
-  Printf.printf "Finished reading file.\n%!";
   close_in file;
   f, (n, m)
 ;;
 
-
-
-let print_array a =
+(* Afficher la solution *)
+let print_solution sigma n m =
+  let a = Array.init n (
+      fun i -> Array.init m (
+        fun j -> try Hashtbl.find sigma (Var((i,j))) with Not_found -> 0
+        )
+    )
+  in
   Array.iter (fun row ->
     Array.iter (fun v -> Printf.printf "%d " v) row;
-    print_newline ()
-  ) a
+      print_newline ()
+    ) a;
 ;;
 
-let f, (n, m) = file_to_formula "nonogram.txt" in
+(* Partie principale du programme *)
+if Array.length Sys.argv <> 2 (* On s'assure que le programme fournisse le fichier d'entée *)
+then exit 1;
 
-Printf.printf "Formula created.\n%!";
+let f, (n, m) = file_to_formula Sys.argv.(1) in
 
 let vars = ref [] in
 for i = 0 to n-1 do
@@ -217,25 +191,11 @@ for i = 0 to n-1 do
   done;
 done;
 
-Printf.printf "Variables created, Quine starting...\n%!";
+let sigma = Hashtbl.create 2048 in (* Contient notre solution *)
+let r = found_valuation (simplify f) sigma !vars in
 
+if r
+then print_solution sigma n m
+else exit 1;
 
-let sigma = Hashtbl.create 2048 in
-
-
-let r = quine (simplify f) sigma !vars in
-
-Printf.printf "Quine finished.\n%!";
-
-if r then (
-    Printf.printf "The formula is satisfiable.\n%!";
-    let a = Array.init n (
-      fun i -> Array.init m (
-        fun j -> try Hashtbl.find sigma (Var((i,j))) with Not_found -> 0
-        )
-    ) in
-    print_array a;
-  )
-else
-  Printf.printf "The formula is not satisfiable.\n%!";
-
+exit 0;
